@@ -12,7 +12,7 @@
  */
 import "dotenv/config";
 import express from "express";
-import { Keypair } from "@stellar/stellar-sdk";
+import { Keypair, scValToNative, xdr } from "@stellar/stellar-sdk";
 import {
   IdentityClient,
   CommerceClient,
@@ -21,6 +21,7 @@ import {
   TESTNET,
   type MarcConfig,
   type Agent,
+  type Job,
 } from "marc-stellar-sdk";
 
 const cfg: MarcConfig = {
@@ -35,6 +36,37 @@ const BASE_PORT = 4410;
 const NUM_SELLERS = 4;
 const NUM_BUYERS = 5;
 const BUDGET = BigInt(10_000_000); // 1 USDC
+
+/**
+ * Decode a hex-encoded ScVal string (as returned raw by the Soroban RPC) into
+ * a human-readable JS value.  Use this when inspecting response payloads that
+ * have not been passed through the SDK client yet.
+ */
+function decodeScValHex(hex: string): unknown {
+  try {
+    return scValToNative(xdr.ScVal.fromXDR(hex, "hex"));
+  } catch {
+    return `(decode error: ${hex.slice(0, 32)}…)`;
+  }
+}
+
+/** Human-readable summary of an on-chain Job record. */
+function fmtJob(job: Job | null): string {
+  if (!job) return "(not found)";
+  const usdc = (Number(job.budget) / 1e7).toFixed(2);
+  return (
+    `id=${job.id} status=${job.status} budget=${usdc} USDC ` +
+    `client=${job.client.slice(0, 8)}… ` +
+    `provider=${job.provider.slice(0, 8)}… ` +
+    `deliverable=${job.deliverable || "(none)"}`
+  );
+}
+
+/** Human-readable summary of an on-chain Agent record. */
+function fmtAgent(agent: Agent | null): string {
+  if (!agent) return "(not found)";
+  return `id=${agent.id} owner=${agent.owner.slice(0, 8)}… uri=${agent.uri}`;
+}
 
 function tag(role: string, i: number) {
   return `[${role}-${i}]`;
@@ -116,7 +148,7 @@ async function runBuyer(
   console.log(`${t} found ${allAgents.length} agents on-chain`);
 
   const picked = sellers[(index - 1) % sellers.length];
-  console.log(`${t} chose seller agent #${picked.agent.id} (${picked.agent.owner.slice(0, 8)}...)`);
+  console.log(`${t} chose seller — ${fmtAgent(picked.agent)}`);
 
   // Create escrow job
   const jobId = await commerce.createJob(
@@ -142,7 +174,7 @@ async function runBuyer(
   // Buyer (evaluator) completes job → 99/1 split
   await commerce.complete(kp, jobId);
   const job = await commerce.getJob(jobId);
-  console.log(`${t} job #${jobId} completed — status: ${job?.status} — 99% to seller, 1% fee`);
+  console.log(`${t} job complete — ${fmtJob(job)} — 99% to seller, 1% fee`);
 }
 
 // --- Main ---
